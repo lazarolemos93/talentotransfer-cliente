@@ -11,9 +11,9 @@ interface Incident {
   id: string;
   title: string;
   description: string;
-  status: 'open' | 'approved' | 'in_progress' | 'resolved' | 'closed';
+  status: 'open' | 'approved' | 'rejected' | 'waiting_delivery' | 'pending_client' | 'closed';
   priority: 'low' | 'medium' | 'high' | 'critical';
-  createdAt: string;
+  createdAt: string | any;
   updatedAt?: string;
   assignedTo?: string;
   reportedBy: string;
@@ -28,10 +28,19 @@ interface IncidentSectionProps {
 }
 
 export function IncidentSection({ incidents, loading, error }: IncidentSectionProps) {
-  const formatDate = (dateStr: string | undefined) => {
+  const formatDate = (dateStr: string | { toDate: () => Date } | undefined) => {
     if (!dateStr) return 'Sin fecha definida';
     try {
+      // Handle Firebase Timestamp objects
+      if (typeof dateStr === 'object' && 'toDate' in dateStr) {
+        return format(dateStr.toDate(), "d 'de' MMMM, yyyy", { locale: es });
+      }
+      
+      // Handle string dates
       const date = new Date(dateStr);
+      if (isNaN(date.getTime())) {
+        return 'Fecha inválida';
+      }
       return format(date, "d 'de' MMMM, yyyy", { locale: es });
     } catch (error) {
       console.error('Error al formatear la fecha:', error);

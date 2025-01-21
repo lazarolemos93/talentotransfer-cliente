@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { collection, getDocs, query, where, orderBy } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { useAuth } from '@/context/AuthContext';
+import { useCompany } from '@/context/CompanyContext';
 import { Project, Milestone, BacklogItem, Delivery, Ticket, Incident, Invoice } from '@/types/Project';
 
 const getProjectStatus = (backlog: BacklogItem[] = []): 'active' | 'completed' | 'pending' => {
@@ -42,11 +43,13 @@ export const useProjects = () => {
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const { user, company_id } = useAuth();
+  const { user } = useAuth();
+  const { selectedCompany } = useCompany();
 
   useEffect(() => {
     const fetchProjects = async () => {
-      if (!user || !company_id) {
+      console.log("user ", user, "selectedCompany ", selectedCompany);
+      if (!user || !selectedCompany) {
         setProjects([]);
         setLoading(false);
         return;
@@ -55,32 +58,64 @@ export const useProjects = () => {
       try {
         setLoading(true);
         // 1. Obtener proyectos
-        console.log('Intentando obtener proyectos para company_id:', company_id);
+        console.log('Intentando obtener proyectos para company:', {
+          companyId: selectedCompany.id,
+          companyIdAsNumber: parseInt(selectedCompany.id),
+          companyData: selectedCompany,
+          userId: user.uid,
+          userCompanies: user.company_id
+        });
+        console.log("selectedCompany", selectedCompany);
+        
+        // Projects query
+        console.log('=== PROJECTS QUERY ===');
         const projectsRef = collection(db, 'projects');
-        const q = query(projectsRef, where('company_id', '==', company_id));
+        const q = query(
+          projectsRef,
+          where('company_id', '==', Number(selectedCompany.id))
+        );
         let querySnapshot;
         try {
           querySnapshot = await getDocs(q);
-          console.log('Proyectos obtenidos:', querySnapshot.size);
+          console.log('Projects query result:', {
+            size: querySnapshot.size,
+            query: q,
+            companyId: selectedCompany.id
+          });
         } catch (err) {
-          console.error('Error al obtener proyectos:', err);
+          console.error('Projects query error:', err);
           throw new Error('Error al obtener la lista de proyectos');
         }
         
-        // Obtener las facturas relacionadas con los proyectos de la compañía
-
+        // Get project IDs
         const projectIds = querySnapshot.docs.map(doc => doc.id);
-        console.log("projectIds ", projectIds);
+        console.log("=== INVOICES QUERY ===");
+        console.log("Project IDs for invoices query:", projectIds);
         
-        const invoicesRef = collection(db, 'invoices');
-        const invoicesQuery = query(invoicesRef, where('projectId', 'in', projectIds));
-        const invoicesSnapshot = await getDocs(invoicesQuery);
-        const allInvoices = invoicesSnapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        })) as Invoice[];
+        // Invoices query
+        let allInvoices: Invoice[] = [];
+        try {
+          const invoicesRef = collection(db, 'invoices');
+          const invoicesQuery = query(invoicesRef, where('projectId', 'in', projectIds));
+          console.log('Executing invoices query with:', {
+            projectIds,
+            query: invoicesQuery
+          });
+          const invoicesSnapshot = await getDocs(invoicesQuery);
+          console.log('Invoices query result:', {
+            size: invoicesSnapshot.size
+          });
+          allInvoices = invoicesSnapshot.docs.map(doc => ({
+            id: doc.id,
+            ...doc.data()
+          })) as Invoice[];
+        } catch (err) {
+          console.error('Invoices query error:', err);
+          console.log('Continuing with empty invoices array');
+        }
 
         // Fetch all projects with their subcollections
+        console.log("=== SUBCOLLECTIONS QUERIES ===");
         const projectsData = await Promise.all(
           querySnapshot.docs.map(async (projectDoc) => {
             const projectData = projectDoc.data();
@@ -90,7 +125,15 @@ export const useProjects = () => {
               // 2. Obtener milestones
               console.log('Intentando obtener milestones para proyecto:', projectDoc.id);
               const milestonesRef = collection(projectDoc.ref, 'milestones');
-              const milestonesSnapshot = await getDocs(milestonesRef);
+              const milestonesQuery = query(milestonesRef);
+              console.log('Executing milestones query with:', {
+                projectId: projectDoc.id,
+                query: milestonesQuery
+              });
+              const milestonesSnapshot = await getDocs(milestonesQuery);
+              console.log('Milestones query result:', {
+                size: milestonesSnapshot.size
+              });
               const milestones = milestonesSnapshot.docs.map(doc => ({
                 id: doc.id,
                 ...doc.data()
@@ -100,7 +143,15 @@ export const useProjects = () => {
               // 3. Obtener backlog items
               console.log('Intentando obtener backlog items para proyecto:', projectDoc.id);
               const backlogRef = collection(projectDoc.ref, 'backlog');
-              const backlogSnapshot = await getDocs(backlogRef);
+              const backlogQuery = query(backlogRef);
+              console.log('Executing backlog query with:', {
+                projectId: projectDoc.id,
+                query: backlogQuery
+              });
+              const backlogSnapshot = await getDocs(backlogQuery);
+              console.log('Backlog query result:', {
+                size: backlogSnapshot.size
+              });
               const backlog = backlogSnapshot.docs.map(doc => ({
                 id: doc.id,
                 project_id: projectDoc.id,
@@ -111,7 +162,15 @@ export const useProjects = () => {
               // 4. Obtener tickets
               console.log('Intentando obtener tickets para proyecto:', projectDoc.id);
               const ticketsRef = collection(projectDoc.ref, 'tickets');
-              const ticketsSnapshot = await getDocs(ticketsRef);
+              const ticketsQuery = query(ticketsRef, where('assignedTo', '==', user?.uid));
+              console.log('Executing tickets query with:', {
+                projectId: projectDoc.id,
+                query: ticketsQuery
+              });
+              const ticketsSnapshot = await getDocs(ticketsQuery);
+              console.log('Tickets query result:', {
+                size: ticketsSnapshot.size
+              });
               const tickets = ticketsSnapshot.docs.map(doc => ({
                 id: doc.id,
                 title: doc.data().title,
@@ -128,9 +187,30 @@ export const useProjects = () => {
               // 5. Obtener deliveries
               console.log('Intentando obtener deliveries para proyecto:', projectDoc.id);
               const deliveriesRef = collection(projectDoc.ref, 'deliveries');
-              const deliveriesSnapshot = await getDocs(deliveriesRef);
+              const deliveriesQuery = query(deliveriesRef, where('status', 'in', [
+                'approved',
+                'client_rejected',
+                'client_approve',
+                'waiting_install',
+                'server_installed'
+              ]));
+              console.log('Executing deliveries query with:', {
+                projectId: projectDoc.id,
+                statusFilter: [
+                  'approved',
+                  'client_rejected',
+                  'client_approve',
+                  'waiting_install',
+                  'server_installed'
+                ]
+              });
+              const deliveriesSnapshot = await getDocs(deliveriesQuery);
+              console.log('Deliveries query result:', {
+                size: deliveriesSnapshot.size
+              });
               const deliveries = deliveriesSnapshot.docs.map(doc => ({
                 id: doc.id,
+                projectId: projectDoc.id,
                 ...doc.data()
               })) as Delivery[];
               console.log('Deliveries obtenidos:', deliveries.length);
@@ -138,8 +218,16 @@ export const useProjects = () => {
 
               // 6. Obtener incidents
               console.log('Intentando obtener incidents para proyecto:', projectDoc.id);
-              const incidentsRef = collection(projectDoc.ref, 'incidents');
-              const incidentsSnapshot = await getDocs(incidentsRef);
+              const incidentsRef = collection(projectDoc.ref, 'incidents');          
+              const incidentsQuery = query(incidentsRef);
+              console.log('Executing incidents query with:', {
+                projectId: projectDoc.id,
+                query: incidentsQuery
+              });
+              const incidentsSnapshot = await getDocs(incidentsQuery);
+              console.log('Incidents query result:', {
+                size: incidentsSnapshot.size
+              });
               const incidents = incidentsSnapshot.docs.map(doc => ({
                 id: doc.id,
                 title: doc.data().title,
@@ -245,7 +333,7 @@ export const useProjects = () => {
     };
 
     fetchProjects();
-  }, [user, company_id]);
+  }, [user, selectedCompany]);
 
   return { projects, loading, error };
 };

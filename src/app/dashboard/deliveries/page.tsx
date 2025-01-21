@@ -31,6 +31,10 @@ import { doc, updateDoc, getDoc, collection, query, where, getDocs } from 'fireb
 import { db } from '@/lib/firebase';
 import { Video, Link, ExternalLink, CheckSquare, AlertCircle } from 'lucide-react';
 import { Delivery as DeliveryType, Project, Milestone, Incident } from '@/types/Project';
+import { DeliveryFilter } from '@/components/dashboard/deliveries/DeliveryFilter';
+import { RejectDeliveryDialog } from '@/components/dashboard/deliveries/RejectDeliveryDialog';
+import { ApproveDeliveryDialog } from '@/components/dashboard/deliveries/ApproveDeliveryDialog';
+import { CompanyBillingInfo } from '@/types/Payment';
 
 interface Task {
   id: string;
@@ -41,7 +45,7 @@ interface Task {
 interface DeliveryWithExtras extends DeliveryType {
   projectName: string;
   milestone?: Milestone;
-  incidents?: Incident[];
+  relatedIncidents?: Incident[];
   isInvoiced?: boolean;
 }
 
@@ -54,15 +58,51 @@ export default function DeliveriesPage() {
   const router = useRouter();
   const { projects, loading } = useProjects();
   const [expandedDeliveries, setExpandedDeliveries] = useState<Set<string>>(new Set());
-  const [reviewDialogOpen, setReviewDialogOpen] = useState(false);
+  const [selectedProject, setSelectedProject] = useState<string>('all');
+  const [selectedTab, setSelectedTab] = useState<string>('pending_approval');
+  const [searchTerm, setSearchTerm] = useState<string>('');
+  const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
+  const [approveDialogOpen, setApproveDialogOpen] = useState(false);
+  const [companyData, setCompanyData] = useState<CompanyBillingInfo | null>(null);
   const [selectedDelivery, setSelectedDelivery] = useState<DeliveryWithExtras | null>(null);
   const [reviewAction, setReviewAction] = useState<'approve' | 'reject' | null>(null);
   const [reviewComment, setReviewComment] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const { toast } = useToast();
 
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case 'delivered':
+        return 'bg-blue-50 text-blue-700 border border-blue-200';
+      case 'reviewing':
+        return 'bg-amber-50 text-amber-700 border border-amber-200';
+      case 'approved':
+        return 'bg-emerald-50 text-emerald-700 border border-emerald-200';
+      case 'rejected':
+        return 'bg-rose-50 text-rose-700 border border-rose-200';
+      default:
+        return 'bg-gray-50 text-gray-700 border border-gray-200';
+    }
+  };
+
+  const getStatusText = (status: string) => {
+    switch (status) {
+      case 'delivered':
+        return 'Entregada';
+      case 'reviewing':
+        return 'En Revisión';
+      case 'approved':
+        return 'Aprobada';
+      case 'rejected':
+        return 'Rechazada';
+      default:
+        return status;
+    }
+  };
+
   // Obtener todas las entregas de todos los proyectos con sus hitos y tareas
   const deliveries = projects.flatMap(project => {
+    console.log("project.devliveries ", project.deliveries)
     return (project.deliveries || []).map((delivery: DeliveryType) => {
       // Encontrar el hito correspondiente
       const milestone = project.milestones?.find(m => m.id === delivery.milestoneId);
@@ -70,14 +110,18 @@ export default function DeliveriesPage() {
       // Encontrar las incidencias relacionadas
       const relatedIncidents = project.incidents
         ? project.incidents.filter(incident => 
-            incident.status === 'open' || 
-            incident.status === 'in_progress'
+            incident.status !== 'open'
           )
           .map(incident => ({
             id: incident.id,
             title: incident.title,
             description: incident.description,
-            status: incident.status
+            status: incident.status,
+            priority: incident.priority,
+            createdAt: incident.createdAt,
+            updatedAt: incident.updatedAt,
+            assignedTo: incident.assignedTo,
+            reportedBy: incident.reportedBy
           }))
         : [];
 
@@ -98,11 +142,11 @@ export default function DeliveriesPage() {
           status: milestone.status,
           backlogItems: milestone.backlogItems || []
         } : undefined,
-        incidents: relatedIncidents,
+        relatedIncidents,
         isInvoiced
       };
     });
-  }).filter(delivery => delivery.status !== 'delivered');
+  });
 
   useEffect(() => {
     if (projects.length > 0) {
@@ -120,52 +164,107 @@ export default function DeliveriesPage() {
     setExpandedDeliveries(newExpanded);
   };
 
-  const handleReview = (delivery: DeliveryWithExtras, action: 'approve' | 'reject') => {
-    setSelectedDelivery(delivery);
-    setReviewAction(action);
-    setReviewDialogOpen(true);
+  const formatDate = (date: string | Timestamp | Date) => {
+    try {
+      let parsedDate: Date;
+      
+      if (isTimestamp(date)) {
+        parsedDate = date.toDate();
+      } else if (typeof date === 'string') {
+        parsedDate = new Date(date);
+      } else if (date instanceof Date) {
+        parsedDate = date;
+      } else {
+        console.error('Unexpected date format:', date);
+        return 'Fecha inválida';
+      }
+      
+      if (isNaN(parsedDate.getTime())) {
+        console.error('Invalid parsed date:', parsedDate);
+        throw new Error('Invalid date');
+      }
+      
+      return format(parsedDate, "d 'de' MMMM 'de' yyyy", { locale: es });
+    } catch (error) {
+      console.error('Error al formatear la fecha:', error);
+      return 'Fecha inválida';
+    }
   };
 
-  const submitReview = async () => {
-    if (!selectedDelivery || !reviewAction) return;
+  const tabs = [
+    {
+      id: 'pending_approval',
+      label: 'Pendientes de Aprobación',
+      description: 'Entregas que necesitan tu aprobación',
+      states: ['approved']
+    },
+    {
+      id: 'pending_payment',
+      label: 'Pendientes de Pago',
+      description: 'Entregas aprobadas pendientes de pago',
+      states: ['client_approve']
+    },
+    {
+      id: 'installing',
+      label: 'En Instalación',
+      description: 'Entregas en proceso de instalación',
+      states: ['waiting_install']
+    },
+    {
+      id: 'completed',
+      label: 'Completadas',
+      description: 'Entregas instaladas en el servidor',
+      states: ['server_installed']
+    },
+    {
+      id: 'rejected',
+      label: 'Rechazadas',
+      description: 'Entregas rechazadas por el cliente',
+      states: ['client_rejected']
+    }
+  ];
 
+  const filteredDeliveries = deliveries.filter(delivery => {
+    // Filtrar por proyecto
+    if (selectedProject !== 'all' && delivery.projectId !== selectedProject) {
+      return false;
+    }
+
+    // Obtener los estados correspondientes al tab seleccionado
+    const currentTab = tabs.find(tab => tab.id === selectedTab);
+    if (!currentTab) return true;
+
+    return currentTab.states.includes(delivery.status);
+  });
+
+  const handleRejectDelivery = async (id: string, message: string) => {
     setIsSubmitting(true);
     try {
-      const deliveryRef = doc(db, 'projects', selectedDelivery.projectId, 'deliveries', selectedDelivery.id);
-      
-      if (reviewAction === 'approve') {
-        await updateDoc(deliveryRef, {
-          status: 'client_approved',
-          reviewNotes: reviewComment,
-          reviewedAt: Timestamp.now()
-        });
-        toast({
-          title: "Entrega aprobada",
-          description: "La entrega ha sido aprobada exitosamente.",
-        });
-        // Redirigir al proyecto
-        router.push(`/dashboard/projects/${selectedDelivery.projectId}`);
-      } else {
-        await updateDoc(deliveryRef, {
-          status: 'rejected',
-          reviewNotes: reviewComment,
-          reviewedAt: Timestamp.now()
-        });
-        toast({
-          title: "Entrega rechazada",
-          description: "La entrega ha sido rechazada.",
-        });
+      // Encontrar el delivery en la lista para obtener el projectId
+      const delivery = deliveries.find(d => d.id === id);
+      if (!delivery) {
+        throw new Error('Delivery no encontrado');
       }
 
-      setReviewDialogOpen(false);
-      setReviewComment('');
+      const deliveryRef = doc(db, 'projects', delivery.projectId.toString(), 'deliveries', id);
+      await updateDoc(deliveryRef, {
+        status: 'client_rejected',
+        reviewNotes: message,
+        reviewedAt: new Date().toISOString()
+      });
+      
+      toast({
+        title: "Entrega rechazada",
+        description: "La entrega ha sido rechazada correctamente",
+      });
+      
+      setRejectDialogOpen(false);
       setSelectedDelivery(null);
-      setReviewAction(null);
     } catch (error) {
-      console.error('Error al procesar la revisión:', error);
+      console.error('Error al rechazar la entrega:', error);
       toast({
         title: "Error",
-        description: "Hubo un error al procesar la revisión.",
+        description: "Hubo un error al rechazar la entrega.",
         variant: "destructive",
       });
     } finally {
@@ -173,33 +272,26 @@ export default function DeliveriesPage() {
     }
   };
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'delivered':
-        return 'bg-blue-100 text-blue-800';
-      case 'reviewing':
-        return 'bg-yellow-100 text-yellow-800';
-      case 'approved':
-        return 'bg-yellow-100 text-yellow-800';
-      case 'rejected':
-        return 'bg-red-100 text-red-800';
-      default:
-        return 'bg-gray-100 text-gray-800';
-    }
-  };
-
-  const getStatusText = (status: string) => {
-    switch (status) {
-      case 'delivered':
-        return 'Entregada';
-      case 'reviewing':
-        return 'En Revisión';
-      case 'approved':
-        return 'Pendiente de Revisión';
-      case 'rejected':
-        return 'Rechazada';
-      default:
-        return status;
+  const handleApproveDelivery = async (id: string) => {
+    setIsSubmitting(true);
+    try {
+      
+      toast({
+        title: "Entrega aprobada",
+        description: "La entrega ha sido aprobada exitosamente.",
+      });
+      
+      setApproveDialogOpen(false);
+      setSelectedDelivery(null);
+    } catch (error) {
+      console.error('Error al aprobar la entrega:', error);
+      toast({
+        title: "Error",
+        description: "Hubo un error al aprobar la entrega.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -207,279 +299,343 @@ export default function DeliveriesPage() {
 
   return (
     <DashboardLayout>
-      <div className="space-y-6">
+      <div className="max-w-[1400px] mx-auto space-y-8 px-4 py-8">
         <div className="flex justify-between items-center">
-          <h1 className="text-3xl font-bold">Entregas</h1>
+          <h1 className="text-2xl font-semibold text-gray-900">
+            Entregas
+          </h1>
         </div>
 
-        <div className="grid gap-6">
-          {loading ? (
-            <Card className="p-6 text-center text-gray-500">
-              Cargando entregas...
-            </Card>
-          ) : deliveries.length === 0 ? (
-            <Card className="p-6 text-center text-gray-500">
-              No hay entregas disponibles
-            </Card>
-          ) : (
-            <ScrollArea className="h-[600px] rounded-md border p-4">
-              {deliveries.map((delivery) => (
-                <Collapsible
-                  key={delivery.id}
-                  open={expandedDeliveries.has(delivery.id)}
-                  onOpenChange={() => toggleExpanded(delivery.id)}
-                  className="mb-6"
-                >
-                  <Card className="overflow-hidden border-none shadow-lg">
-                    <div className="bg-gradient-to-r from-blue-50 to-blue-100 p-6">
-                      <div className="flex flex-col space-y-4">
-                        {/* Header Section */}
-                        <div className="flex flex-col space-y-2">
-                          <div className="flex items-start justify-between">
-                            <div className="space-y-1">
-                              <h3 className="text-xl font-semibold text-gray-900">
-                                {delivery.milestone?.title ? 
-                                  `Entrega del Hito: ${delivery.milestone.title}` : 
-                                  'Entrega sin hito asignado'
-                                }
-                              </h3>
-                              <p className="text-sm text-gray-600">Proyecto: {delivery.projectName}</p>
-                            </div>
-                            <div className="flex gap-2">
-                              <Badge className={getStatusColor(delivery.status)}>
-                                {getStatusText(delivery.status)}
-                              </Badge>
-                              {delivery.isInvoiced && (
-                                <Badge variant="outline" className="bg-green-50 text-green-700">
-                                  Facturado
-                                </Badge>
-                              )}
-                            </div>
-                          </div>
-                          {delivery.createdAt && (
-                            <p className="text-sm text-gray-500">
-                              Entregado el {format(
-                                isTimestamp(delivery.createdAt)
-                                  ? new Date(delivery.createdAt.seconds * 1000)
-                                  : new Date(delivery.createdAt), 
-                                "d 'de' MMMM, yyyy", 
-                                { locale: es }
-                              )}
-                            </p>
-                          )}
-                        </div>
-
-                        {/* Expand/Collapse Button */}
-                        <CollapsibleTrigger asChild>
-                          <Button 
-                            variant="outline" 
-                            className="w-full bg-white hover:bg-gray-50 transition-colors"
-                          >
-                            <div className="flex items-center justify-center gap-2">
-                              {expandedDeliveries.has(delivery.id) ? (
-                                <>
-                                  <ChevronUp className="h-4 w-4" />
-                                  <span>Ocultar detalles</span>
-                                </>
-                              ) : (
-                                <>
-                                  <ChevronDown className="h-4 w-4" />
-                                  <span>Ver detalles</span>
-                                </>
-                              )}
-                            </div>
-                          </Button>
-                        </CollapsibleTrigger>
-                      </div>
+        <div className="mb-6">
+          <div className="border-b">
+            <nav className="-mb-px flex space-x-8" aria-label="Tabs">
+              {tabs.map((tab) => {
+                const count = deliveries.filter(d => tab.states.includes(d.status)).length;
+                return (
+                  <button
+                    key={tab.id}
+                    onClick={() => setSelectedTab(tab.id)}
+                    className={`
+                      relative flex flex-col items-center pb-4 pt-2 px-1 
+                      border-b-2 text-sm font-medium
+                      ${selectedTab === tab.id
+                        ? 'border-blue-500 text-blue-600'
+                        : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                      }
+                    `}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span>{tab.label}</span>
+                      <span className="flex h-5 w-5 items-center justify-center rounded-full bg-blue-100 text-xs font-medium text-blue-600">
+                        {count}
+                      </span>
                     </div>
+                    <span className="mt-1 text-xs text-gray-500">{tab.description}</span>
+                  </button>
+                );
+              })}
+            </nav>
+          </div>
+        </div>
 
-                    <CollapsibleContent>
-                      <div className="p-6 space-y-8">
-                        {/* Video Section */}
-                        {delivery.loomUrl && (
-                          <div className="bg-white rounded-xl overflow-hidden shadow-sm border border-gray-100">
-                            <div className="p-4 border-b border-gray-100">
-                              <div className="flex items-center gap-3">
-                                <div className="p-2 bg-blue-100 rounded-lg">
-                                  <Video className="h-5 w-5 text-blue-600" />
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+          <DeliveryFilter
+            projects={projects}
+            selectedProject={selectedProject}
+            onProjectChange={setSelectedProject}
+            selectedTab={selectedTab}
+            onTabChange={setSelectedTab}
+            searchTerm={searchTerm}
+            onSearchChange={setSearchTerm}
+          />
+
+          <div className="mt-6">
+            {loading ? (
+              <div className="flex justify-center items-center h-64 text-gray-400">
+                <div className="flex items-center space-x-2">
+                  <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce [animation-delay:-0.3s]"></div>
+                  <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce [animation-delay:-0.15s]"></div>
+                  <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
+                </div>
+              </div>
+            ) : deliveries.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-64 text-gray-500">
+                <svg className="w-12 h-12 mb-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
+                </svg>
+                <p>No hay entregas disponibles</p>
+              </div>
+            ) : (
+              <ScrollArea className="h-[700px] pr-4 -mr-4">
+                <div className="space-y-4">
+                  {filteredDeliveries.map((delivery) => (
+                    <Collapsible
+                      key={delivery.id}
+                      open={expandedDeliveries.has(delivery.id)}
+                      onOpenChange={() => toggleExpanded(delivery.id)}
+                    >
+                      <div className="bg-white border border-gray-200 rounded-lg overflow-hidden transition-shadow hover:shadow-md">
+                        <div className="p-6">
+                          <div className="flex flex-col space-y-4">
+                            {/* Header Section */}
+                            <div className="flex items-start justify-between">
+                              <div className="space-y-1 flex-1">
+                                <div className="flex items-center space-x-3">
+                                  <h3 className="text-lg font-medium text-gray-900">
+                                    {delivery.milestone?.title ? 
+                                      delivery.milestone.title : 
+                                      'Entrega sin hito asignado'
+                                    }
+                                  </h3>
+                                  <Badge className={`${getStatusColor(delivery.status)}`}>
+                                    {getStatusText(delivery.status)}
+                                  </Badge>
+                                  {delivery.isInvoiced && (
+                                    <Badge variant="outline" className="bg-gray-50 text-gray-600 border-gray-200">
+                                      Facturado
+                                    </Badge>
+                                  )}
                                 </div>
-                                <div>
-                                  <h4 className="font-medium text-gray-900">Video de presentación</h4>
-                                  <p className="text-sm text-gray-600">
-                                    Demostración de las funcionalidades implementadas
-                                  </p>
+                                <div className="flex items-center space-x-4 text-sm text-gray-500">
+                                  <span>{delivery.projectName}</span>
+                                  {delivery.createdAt && (
+                                    <>
+                                      <span>•</span>
+                                      <span>
+                                        {format(
+                                          isTimestamp(delivery.createdAt)
+                                            ? new Date(delivery.createdAt.seconds * 1000)
+                                            : new Date(delivery.createdAt), 
+                                          "d 'de' MMMM, yyyy", 
+                                          { locale: es }
+                                        )}
+                                      </span>
+                                    </>
+                                  )}
                                 </div>
                               </div>
-                            </div>
-                            <div className="aspect-video">
-                              <iframe
-                                src={delivery.loomUrl.replace('/share/', '/embed/')}
-                                frameBorder="0"
-                                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                                allowFullScreen
-                                className="w-full h-full"
-                              ></iframe>
-                            </div>
-                          </div>
-                        )}
 
-                        {/* Testing URL Section */}
-                        {delivery.testingUrl && (
-                          <div className="bg-white rounded-xl overflow-hidden shadow-sm border border-gray-100">
-                            <div className="p-4">
-                              <div className="flex items-center gap-3">
-                                <div className="p-2 bg-purple-100 rounded-lg">
-                                  <Link className="h-5 w-5 text-purple-600" />
-                                </div>
-                                <div className="flex-1">
-                                  <h4 className="font-medium text-gray-900">URL de pruebas</h4>
-                                  <p className="text-sm text-gray-600 mb-3">
-                                    Acceda a este enlace para probar las nuevas funcionalidades
-                                  </p>
-                                  <a 
+                              <div className="flex items-center space-x-2 ml-4">
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedDelivery(delivery);
+                                    setRejectDialogOpen(true);
+                                  }}
+                                  className="text-gray-700 border-gray-200 hover:bg-gray-50"
+                                >
+                                  Rechazar
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedDelivery(delivery);
+                                    setApproveDialogOpen(true);
+                                  }}
+                                  className="bg-blue-600 text-white hover:bg-blue-700"
+                                >
+                                  Instalar en mi Servidor
+                                </Button>
+                                {delivery.testingUrl && (
+                                  <a
                                     href={delivery.testingUrl}
                                     target="_blank"
                                     rel="noopener noreferrer"
-                                    className="text-purple-600 hover:text-purple-800 break-all flex items-center gap-2 text-sm"
+                                    className="flex items-center space-x-2 text-blue-600 hover:text-blue-700"
                                   >
-                                    <ExternalLink className="h-4 w-4" />
-                                    {delivery.testingUrl}
+                                    <Link className="h-4 w-4" />
+                                    <span className="text-sm">URL de pruebas</span>
                                   </a>
-                                </div>
+                                )}
                               </div>
                             </div>
-                          </div>
-                        )}
 
-                        {/* Tasks Section */}
-                        {delivery.milestone?.backlogItems && delivery.milestone.backlogItems.length > 0 && (
-                          <div className="bg-white rounded-xl overflow-hidden shadow-sm border border-gray-100">
-                            <div className="p-4 border-b border-gray-100">
-                              <div className="flex items-center gap-3">
-                                <div className="p-2 bg-green-100 rounded-lg">
-                                  <CheckSquare className="h-5 w-5 text-green-600" />
+                            {/* Expand/Collapse Button */}
+                            <CollapsibleTrigger asChild>
+                              <Button 
+                                variant="ghost"
+                                className="w-full justify-center text-gray-500 hover:text-gray-900 hover:bg-gray-50"
+                              >
+                                <div className="flex items-center space-x-2">
+                                  <span className="text-sm">
+                                    {expandedDeliveries.has(delivery.id) ? 'Ocultar detalles' : 'Ver detalles'}
+                                  </span>
+                                  {expandedDeliveries.has(delivery.id) ? (
+                                    <ChevronUp className="h-4 w-4" />
+                                  ) : (
+                                    <ChevronDown className="h-4 w-4" />
+                                  )}
                                 </div>
+                              </Button>
+                            </CollapsibleTrigger>
+                          </div>
+                        </div>
+
+                        <CollapsibleContent>
+                          <div className="border-t border-gray-200 bg-gray-50 p-6">
+                            <div className="grid gap-6">
+                              {/* Descripción */}
+                              {delivery.description && (
                                 <div>
-                                  <h4 className="font-medium text-gray-900">Tareas implementadas</h4>
-                                  <p className="text-sm text-gray-600">
-                                    {delivery.milestone.backlogItems.length} tareas completadas en este hito
-                                  </p>
+                                  <h4 className="text-sm font-medium text-gray-900 mb-2">Descripción</h4>
+                                  <p className="text-gray-600">{delivery.description}</p>
                                 </div>
-                              </div>
-                            </div>
-                            <div className="divide-y divide-gray-100">
-                              {delivery.milestone.backlogItems.map((task, index) => (
-                                <div 
-                                  key={task.id} 
-                                  className="p-4 hover:bg-gray-50 transition-colors"
-                                >
-                                  <div className="flex items-start gap-3">
-                                    <div className="flex-shrink-0 w-6 h-6 rounded-full bg-green-100 text-green-600 flex items-center justify-center text-sm">
-                                      {index + 1}
-                                    </div>
-                                    <div>
-                                      <h5 className="font-medium text-gray-900">{task.task}</h5>
-                                      {task.description && (
-                                        <p className="text-sm text-gray-600 mt-1">{task.description}</p>
-                                      )}
-                                    </div>
+                              )}
+
+                              {/* Tareas */}
+                              {delivery.milestone?.backlogItems && delivery.milestone.backlogItems.length > 0 && (
+                                <div>
+                                  <h4 className="text-sm font-medium text-gray-900 mb-3">Tareas completadas</h4>
+                                  <div className="space-y-3">
+                                    {delivery.milestone.backlogItems.map((item, index) => (
+                                      <div key={item.id || index} className="flex items-start space-x-3 bg-white p-3 rounded-lg border border-gray-200">
+                                        <CheckSquare className="h-5 w-5 text-emerald-500 mt-0.5" />
+                                        <div>
+                                          <p className="font-medium text-gray-900">{item.task}</p>
+                                          {item.description && (
+                                            <p className="text-sm text-gray-500 mt-1">{item.description}</p>
+                                          )}
+                                        </div>
+                                      </div>
+                                    ))}
                                   </div>
                                 </div>
-                              ))}
-                            </div>
-                          </div>
-                        )}
+                              )}
 
-                        {/* Incidents Section */}
-                        {delivery.incidents && delivery.incidents.length > 0 && (
-                          <div className="bg-white rounded-xl overflow-hidden shadow-sm border border-gray-100">
-                            <div className="p-4 border-b border-gray-100">
-                              <div className="flex items-center gap-3">
-                                <div className="p-2 bg-red-100 rounded-lg">
-                                  <AlertCircle className="h-5 w-5 text-red-600" />
-                                </div>
+                              {/* Incidencias */}
+                              {delivery.relatedIncidents && delivery.relatedIncidents.length > 0 && (
                                 <div>
-                                  <h4 className="font-medium text-gray-900">Incidencias reportadas</h4>
-                                  <p className="text-sm text-gray-600">
-                                    {delivery.incidents.length} incidencia(s) relacionada(s) con este hito
-                                  </p>
+                                  <h4 className="text-sm font-medium text-gray-900 mb-3">Incidencias relacionadas</h4>
+                                  <div className="space-y-3">
+                                    {delivery.relatedIncidents.map((incident) => (
+                                      <div key={incident.id} className="flex items-start space-x-3 bg-white p-3 rounded-lg border border-gray-200">
+                                        <AlertCircle className="h-5 w-5 text-amber-500 mt-0.5" />
+                                        <div>
+                                          <p className="font-medium text-gray-900">{incident.title}</p>
+                                          {incident.description && (
+                                            <p className="text-sm text-gray-500 mt-1">{incident.description}</p>
+                                          )}
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
                                 </div>
-                              </div>
-                            </div>
-                            <div className="divide-y divide-gray-100">
-                              {delivery.incidents.map(incident => (
-                                <div 
-                                  key={incident.id} 
-                                  className="p-4 hover:bg-gray-50 transition-colors"
-                                >
-                                  <div className="flex items-start justify-between">
-                                    <div className="flex items-start gap-3">
-                                      <div className="flex-shrink-0 w-2 h-2 mt-2 rounded-full bg-red-500" />
-                                      <div>
-                                        <h5 className="font-medium text-gray-900">{incident.title}</h5>
-                                        {incident.description && (
-                                          <p className="text-sm text-gray-600 mt-1">{incident.description}</p>
-                                        )}
+                              )}
+
+                              {/* Enlaces */}
+                              <div>
+                                <h4 className="text-sm font-medium text-gray-900 mb-3">Enlaces y recursos</h4>
+                                <div className="grid gap-4">
+                                  {/* Video de Loom */}
+                                  {delivery.loomUrl && (
+                                    <div className="relative overflow-hidden rounded-lg border border-purple-200 bg-gradient-to-r from-purple-50 to-blue-50 hover:border-purple-300 transition-all duration-200">
+                                      <div className="space-y-3 p-4">
+                                        <div className="relative pt-[56.25%] bg-black/5 rounded-lg overflow-hidden">
+                                          <iframe
+                                            src={delivery.loomUrl.replace('share', 'embed')}
+                                            className="absolute inset-0 w-full h-full"
+                                            frameBorder="0"
+                                            allowFullScreen
+                                          />
+                                        </div>
+                                        <div className="flex items-center space-x-3">
+                                          <div className="flex items-center justify-center w-8 h-8 rounded-full bg-purple-100 text-purple-600">
+                                            <Video className="h-4 w-4" />
+                                          </div>
+                                          <div className="flex-1 min-w-0">
+                                            <p className="font-medium text-purple-900 truncate">
+                                              Video explicativo
+                                            </p>
+                                            <p className="text-sm text-purple-600 truncate">
+                                              {delivery.loomUrl}
+                                            </p>
+                                          </div>
+                                          <a
+                                            href={delivery.loomUrl}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="text-purple-400 hover:text-purple-600 transition-colors"
+                                          >
+                                            <ExternalLink className="h-4 w-4" />
+                                          </a>
+                                        </div>
                                       </div>
                                     </div>
-                                    <Badge 
-                                      variant="outline" 
-                                      className="bg-red-50 text-red-700 ml-4"
-                                    >
-                                      {incident.status}
-                                    </Badge>
-                                  </div>
+                                  )}
+
+                                  {/* URL de pruebas */}
+                                  {delivery.testingUrl && (
+                                    <div className="relative overflow-hidden rounded-lg border border-blue-200 bg-gradient-to-r from-blue-50 to-cyan-50 hover:border-blue-300 transition-all duration-200">
+                                      <div className="absolute inset-0 opacity-0 hover:opacity-100 transition-opacity duration-200 bg-black/5"></div>
+                                      <a
+                                        href={delivery.testingUrl}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="flex items-center p-4 space-x-3 relative z-10"
+                                      >
+                                        <div className="flex items-center justify-center w-8 h-8 rounded-full bg-blue-100 text-blue-600">
+                                          <Link className="h-4 w-4" />
+                                        </div>
+                                        <div className="flex-1 min-w-0">
+                                          <p className="font-medium text-blue-900 truncate">
+                                            URL de pruebas
+                                          </p>
+                                          <p className="text-sm text-blue-600 truncate">
+                                            {delivery.testingUrl}
+                                          </p>
+                                        </div>
+                                        <ExternalLink className="h-4 w-4 text-blue-400" />
+                                      </a>
+                                    </div>
+                                  )}
                                 </div>
-                              ))}
+                              </div>
                             </div>
                           </div>
-                        )}
+                        </CollapsibleContent>
                       </div>
-                    </CollapsibleContent>
-                  </Card>
-                </Collapsible>
-              ))}
-            </ScrollArea>
-          )}
-        </div>
-      </div>
-
-      <Dialog open={reviewDialogOpen} onOpenChange={setReviewDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>
-              {reviewAction === 'approve' ? 'Aprobar Entrega' : 'Rechazar Entrega'}
-            </DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4 py-4">
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Comentarios de la revisión</label>
-              <Textarea
-                value={reviewComment}
-                onChange={(e) => setReviewComment(e.target.value)}
-                placeholder="Escribe tus comentarios aquí..."
-                className="min-h-[100px]"
-              />
-            </div>
+                    </Collapsible>
+                  ))}
+                </div>
+              </ScrollArea>
+            )}
           </div>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setReviewDialogOpen(false)}
-              disabled={isSubmitting}
-            >
-              Cancelar
-            </Button>
-            <Button
-              onClick={submitReview}
-              disabled={isSubmitting}
-              variant={reviewAction === 'approve' ? 'default' : 'destructive'}
-            >
-              {isSubmitting ? 'Procesando...' : reviewAction === 'approve' ? 'Aprobar' : 'Rechazar'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        </div>
+        {selectedDelivery && (
+          <>
+            <RejectDeliveryDialog
+              isOpen={rejectDialogOpen}
+              onClose={() => {
+                setRejectDialogOpen(false);
+                setSelectedDelivery(null);
+              }}
+              onConfirm={(message) => handleRejectDelivery(selectedDelivery.id, message)}
+              deliveryTitle={`${selectedDelivery.projectName} - ${selectedDelivery.milestone?.title || 'Sin hito'}`}
+            />
+
+            <ApproveDeliveryDialog
+              isOpen={approveDialogOpen}
+              onClose={() => {
+                setApproveDialogOpen(false);
+                setSelectedDelivery(null);
+              }}
+              delivery={selectedDelivery}
+              tasks={selectedDelivery.milestone?.backlogItems?.map(item => ({
+                id: item.id,
+                task: item.task,
+                description: item.description || undefined
+              })) || []}
+              incidents={selectedDelivery.relatedIncidents || []}
+              onConfirm={() => handleApproveDelivery(selectedDelivery.id)}
+              isInvoiced={selectedDelivery.isInvoiced || false}
+              companyData={companyData || undefined}
+            />
+          </>
+        )}
+      </div>
     </DashboardLayout>
   );
 }

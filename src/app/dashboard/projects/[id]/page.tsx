@@ -5,6 +5,7 @@ import { useParams } from 'next/navigation';
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { useAuth } from '@/context/AuthContext';
+import { useCompany } from '@/context/CompanyContext';
 import DashboardLayout from '@/components/dashboard/layout';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -13,6 +14,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { format } from 'date-fns';
 import { es } from 'date-fns/locale';
 import { Project, Milestone, BacklogItem } from '@/types/Project';
+import { FiGithub, FiList, FiMessageSquare, FiAlertCircle, FiBook, FiPackage, FiTag, FiXCircle } from 'react-icons/fi';
 
 interface Document {
   id: string;
@@ -24,6 +26,7 @@ interface Document {
 
 export default function ProjectDetailPage() {
   const { user } = useAuth();
+  const { selectedCompany } = useCompany();
   const params = useParams();
   const [project, setProject] = useState<Project | null>(null);
   const [loading, setLoading] = useState(true);
@@ -33,7 +36,7 @@ export default function ProjectDetailPage() {
 
   useEffect(() => {
     async function fetchProject() {
-      if (!user?.company_id) return;
+      if (!selectedCompany?.id) return;
 
       try {
         const projectRef = doc(db, 'projects', params.id as string);
@@ -45,9 +48,9 @@ export default function ProjectDetailPage() {
         }
 
         const projectData = projectDoc.data();
-        
-        // Verify company_id matches
-        if (projectData.company_id !== user.company_id) {
+        console.log("projectData.company_id", projectData.company_id, "selectedCompany.id", selectedCompany.id);
+        // Verify company_id matches with the selected company
+        if (projectData.company_id !== Number(selectedCompany.id)) {
           setError('No tienes acceso a este proyecto');
           return;
         }
@@ -62,7 +65,7 @@ export default function ProjectDetailPage() {
     }
 
     fetchProject();
-  }, [params.id, user?.company_id]);
+  }, [params.id, selectedCompany?.id]);
 
   if (loading) {
     return (

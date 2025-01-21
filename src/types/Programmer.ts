@@ -19,14 +19,31 @@ export interface Programmer {
   }
   
 
-export interface AppUser {
-    uid: string;
-    name: string;
-    email: string | null;
-    programmerId?: string;
-    role?: string;
-  }
+export interface ProgrammerCompany {
+  id: string;
+  name: string;
+  crm_id: string;
+  razon_social: string;
+  identificador_fiscal: string;
+  direccion_fiscal: string;
+  currency?: 'USD' | 'EUR';
+}
 
+export interface CompanyRole {
+  id: string;
+  role: string;
+}
+
+export interface AppUser {
+  uid: string;
+  clientId: string;
+  company_id: CompanyRole[];
+  contact: string;
+  createdAt: string;
+  email: string;
+  name: string;
+  role: string;
+}
 
 export interface Profile {
     id: string;

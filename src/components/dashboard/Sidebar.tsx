@@ -13,8 +13,10 @@ import {
   TicketIcon,
   LogOut,
   Receipt,
+  User,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import CompanySelector from '@/components/CompanySelector';
 
 const navigation = [
   {
@@ -47,6 +49,11 @@ const navigation = [
     href: '/dashboard/billing',
     icon: Receipt,
   },
+  {
+    name: 'Perfil',
+    href: '/dashboard/profile',
+    icon: User,
+  },
 ];
 
 export function Sidebar() {
@@ -59,28 +66,25 @@ export function Sidebar() {
         <Link href="/dashboard" className="flex items-center gap-2">
           <span className="font-bold">Client Dashboard</span>
         </Link>
+        <CompanySelector />
       </div>
       <ScrollArea className="flex-1 overflow-hidden">
-        <div className="space-y-4 py-4">
-          <div className="px-3 py-2">
-            <div className="space-y-1">
-              {navigation.map((item) => (
-                <Link key={item.href} href={item.href}>
-                  <Button
-                    variant={pathname === item.href ? 'secondary' : 'ghost'}
-                    className={cn(
-                      'w-full justify-start gap-2',
-                      pathname === item.href ? 'bg-secondary' : 'hover:bg-secondary/50'
-                    )}
-                  >
-                    <item.icon className="h-4 w-4" />
-                    {item.name}
-                  </Button>
-                </Link>
-              ))}
-            </div>
-          </div>
-        </div>
+        <nav className="grid items-start gap-2 py-4 px-3">
+          {navigation.map((item) => (
+            <Link key={item.href} href={item.href}>
+              <Button
+                variant={pathname === item.href ? 'secondary' : 'ghost'}
+                className={cn(
+                  'w-full justify-start gap-2',
+                  pathname === item.href ? 'bg-secondary' : 'hover:bg-secondary/50'
+                )}
+              >
+                <item.icon className="h-4 w-4" />
+                {item.name}
+              </Button>
+            </Link>
+          ))}
+        </nav>
       </ScrollArea>
       <div className="p-4 border-t">
         <Button

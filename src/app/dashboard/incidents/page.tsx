@@ -32,12 +32,11 @@ export default function IncidentsPage() {
     incident.projectName.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  // Agrupar incidencias por estado
+  // Agrupar incidencias por estado  'waiting_delivery' | 'pending_client'
   const groupedIncidents = {
     open: filteredIncidents.filter(i => i.status === 'open'),
     approved: filteredIncidents.filter(i => i.status === 'approved'),
-    in_progress: filteredIncidents.filter(i => i.status === 'in_progress'),
-    resolved: filteredIncidents.filter(i => i.status === 'resolved'),
+    pending_client: filteredIncidents.filter(i => i.status === 'pending_client'),
     closed: filteredIncidents.filter(i => i.status === 'closed'),
   };
 
@@ -47,12 +46,10 @@ export default function IncidentsPage() {
         return 'bg-red-100 text-red-800';
       case 'approved':
         return 'bg-blue-100 text-blue-800';
-      case 'in_progress':
+      case 'pending_client':
         return 'bg-yellow-100 text-yellow-800';
-      case 'resolved':
-        return 'bg-green-100 text-green-800';
       case 'closed':
-        return 'bg-gray-100 text-gray-800';
+        return 'bg-green-100 text-green-800';
       default:
         return 'bg-gray-100 text-gray-800';
     }
@@ -173,11 +170,8 @@ export default function IncidentsPage() {
             <TabsTrigger value="approved">
               Aprobadas ({groupedIncidents.approved.length})
             </TabsTrigger>
-            <TabsTrigger value="in_progress">
-              En Progreso ({groupedIncidents.in_progress.length})
-            </TabsTrigger>
-            <TabsTrigger value="resolved">
-              Resueltas ({groupedIncidents.resolved.length})
+            <TabsTrigger value="pending_client">
+              Pendientes De Revisión ({groupedIncidents.pending_client.length})
             </TabsTrigger>
             <TabsTrigger value="closed">
               Cerradas ({groupedIncidents.closed.length})
@@ -204,20 +198,11 @@ export default function IncidentsPage() {
                 </div>
               </TabsContent>
 
-              <TabsContent value="in_progress" className="m-0">
+              <TabsContent value="pending_client" className="m-0">
                 <div className="space-y-4">
-                  {groupedIncidents.in_progress.map(renderIncidentCard)}
-                  {groupedIncidents.in_progress.length === 0 && (
+                  {groupedIncidents.pending_client.map(renderIncidentCard)}
+                  {groupedIncidents.pending_client.length === 0 && (
                     <p className="text-center text-gray-500 py-4">No hay incidencias en progreso</p>
-                  )}
-                </div>
-              </TabsContent>
-
-              <TabsContent value="resolved" className="m-0">
-                <div className="space-y-4">
-                  {groupedIncidents.resolved.map(renderIncidentCard)}
-                  {groupedIncidents.resolved.length === 0 && (
-                    <p className="text-center text-gray-500 py-4">No hay incidencias resueltas</p>
                   )}
                 </div>
               </TabsContent>

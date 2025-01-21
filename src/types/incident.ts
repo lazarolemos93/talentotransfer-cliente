@@ -2,7 +2,7 @@ export interface Incident {
   id: string;
   title: string;
   description: string;
-  status: 'open' | 'approved' | 'rejected' | 'completed';
+  status: 'open' | 'approved' | 'rejected' | 'waiting_delivery' | 'pending_client' | 'closed';
   priority: 'low' | 'medium' | 'high';
   projectId: string;
   projectName: string;

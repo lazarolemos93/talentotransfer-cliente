@@ -1,3 +1,5 @@
+import { Timestamp } from "firebase/firestore";
+
 export interface Milestone {
   id: string;
   title: string;
@@ -29,7 +31,7 @@ export interface Incident {
   id: string;
   title: string;
   description: string;
-  status: 'open' | 'approved' |'in_progress' | 'resolved' | 'closed';
+  status: 'open' | 'approved' | 'rejected' | 'waiting_delivery' | 'pending_client' | 'closed';
   priority: 'low' | 'medium' | 'high' | 'critical';
   createdAt: string;
   updatedAt?: string;
@@ -62,21 +64,41 @@ export interface Meeting {
   link: string;
   transcription: string;
   created_at: string;
+  duration?: number;
+  attendees?: string[];
+  notes?: string;
+  recordingUrl?: string;
+}
+
+export interface Task {
+  id: string;
+  task: string;
+  description?: string;
 }
 
 export interface Delivery {
   id: string;
-  projectId: string;
+  projectId: string | number;  // Puede ser string o number
   milestoneId: string;
   programmerId: string;
   loomUrl: string;
   testingUrl: string;
   description?: string;
-  status: 'delivered' | 'reviewing' | 'approved' | 'rejected';
-  createdAt: string;
-  updatedAt?: string;
-  reviewedAt?: string;
+  status: 'delivered' | 'reviewing' | 'rejected' | 'approved' | 'client_rejected' | 'client_approve' | 'waiting_install' | 'server_installed';
+  createdAt: Timestamp;
+  updatedAt?: Timestamp;
+  reviewedAt?: Timestamp;
+  submittedAt?: Timestamp;
   reviewNotes?: string;
+  relatedIncidents?: Incident[];
+  history?: {
+    loomUrl: string;
+    description?: string;
+    createdAt: Timestamp;
+    status: 'delivered' | 'reviewing' | 'approved' | 'rejected' | 'client_approve';
+    reviewNotes?: string;
+  }[];
+  currency?: 'USD' | 'EUR';
 }
 
 export interface Ticket {
@@ -149,4 +171,15 @@ export interface Company {
   identificador_fiscal: string;
   direccion_fiscal: string;
   currency?: 'USD' | 'EUR';
+}
+
+export interface CompanyData {
+  name: string;
+  taxId: string;
+  address: string;
+  billingEmail: string;
+  host?: string;
+  port?: string;
+  database?: string;
+  additionalInfo?: string;
 }

@@ -8,7 +8,10 @@ export interface AppUser {
   uid: string;
   email: string | null;
   role: string;
-  company_id: number;
+  contact: string;
+  company_id: { id: string; role: string; }[];
   name?: string;
   avatar_url?: string;
+  clientId?: string;
+  createdAt?: string;
 }

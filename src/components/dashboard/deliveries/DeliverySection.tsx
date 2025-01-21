@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -8,10 +9,27 @@ import { es } from 'date-fns/locale';
 import { Timestamp } from 'firebase/firestore';
 import { Delivery as DeliveryType } from '@/types/Project';
 import { Project } from '@/types/Project';
+import { DeliveryFilter } from './DeliveryFilter';
+import { RejectDeliveryDialog } from './RejectDeliveryDialog';
+import { ApproveDeliveryDialog } from './ApproveDeliveryDialog';
+import { CompanyBillingInfo } from '@/types/Payment';
 
 interface DeliveryWithExtras extends DeliveryType {
   projectName: string;
   projectId: string;
+  tasks?: { id: string; task: string; description?: string; }[];
+  incidents?: {
+    id: string;
+    title: string;
+    description: string;
+    status: 'open' | 'approved' | 'rejected' | 'waiting_delivery' | 'pending_client' | 'closed';
+    priority: 'low' | 'medium' | 'high' | 'critical';
+    createdAt: string;
+    updatedAt?: string;
+    assignedTo?: string;
+    reportedBy: string;
+  }[];
+  isInvoiced?: boolean;
 }
 
 interface DeliverySectionProps {
@@ -44,9 +62,27 @@ export function DeliverySection({ projectId, projects, loading, error }: Deliver
     return statusMatch;
   });
 
-  const formatDate = (date: string) => {
+  const formatDate = (date: string | Timestamp | Date | undefined | null) => {
+    if (!date) return 'Sin fecha definida';
+    
     try {
-      return format(new Date(date), "d 'de' MMMM, yyyy", { locale: es });
+      let parsedDate: Date;
+      
+      if (isTimestamp(date)) {
+        parsedDate = date.toDate();
+      } else if (typeof date === 'string') {
+        parsedDate = new Date(date);
+      } else if (date instanceof Date) {
+        parsedDate = date;
+      } else {
+        return 'Fecha inválida';
+      }
+      
+      if (isNaN(parsedDate.getTime())) {
+        return 'Fecha inválida';
+      }
+      
+      return format(parsedDate, "d 'de' MMMM 'de' yyyy", { locale: es });
     } catch (error) {
       console.error('Error al formatear la fecha:', error);
       return 'Fecha inválida';
@@ -68,66 +104,108 @@ export function DeliverySection({ projectId, projects, loading, error }: Deliver
     }
   };
 
+  const [selectedProject, setSelectedProject] = useState<string>(projectId || 'all');
+  const [selectedTab, setSelectedTab] = useState<string>('all');
+  const [searchTerm, setSearchTerm] = useState<string>('');
+  const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
+  const [approveDialogOpen, setApproveDialogOpen] = useState(false);
+  const [selectedDelivery, setSelectedDelivery] = useState<DeliveryWithExtras | null>(null);
+  const [companyData, setCompanyData] = useState<CompanyBillingInfo | null>(null);
+
+  const filteredDeliveries = deliveries.filter(delivery => {
+    if (selectedProject === 'all') {
+      return true;
+    }
+    return delivery.projectId === selectedProject;
+  });
+
+  const handleRejectDelivery = (id: string, message: string) => {
+    // Implementar lógica para rechazar la entrega
+  };
+
+  const handleApproveDelivery = (id: string) => {
+    // Implementar lógica para aprobar la entrega
+  };
+
   return (
-    <div className="space-y-4">
-      <div className="flex justify-between items-center">
-        <h2 className="text-xl font-semibold">Entregas Pendientes</h2>
-        <Button variant="outline">Ver Todas</Button>
-      </div>
+    <div className="space-y-6">
+      <DeliveryFilter
+        projects={projects}
+        selectedProject={selectedProject}
+        onProjectChange={setSelectedProject}
+        selectedTab={selectedTab}
+        onTabChange={setSelectedTab}
+        searchTerm={searchTerm}
+        onSearchChange={setSearchTerm}
+      />
 
       <div className="space-y-4">
-        {loading ? (
-          <Card>
-            <CardContent className="py-4 text-center">
-              <div className="animate-pulse flex space-x-4">
-                <div className="flex-1 space-y-4 py-1">
-                  <div className="h-4 bg-gray-200 rounded w-3/4"></div>
-                  <div className="space-y-2">
-                    <div className="h-4 bg-gray-200 rounded"></div>
-                    <div className="h-4 bg-gray-200 rounded w-5/6"></div>
-                  </div>
-                </div>
+        {filteredDeliveries.map((delivery) => (
+          <Card key={delivery.id} className="p-4">
+            <div className="flex justify-between items-start">
+              <div>
+                <h3 className="font-medium">{delivery.projectName}</h3>
+                <p className="text-sm text-gray-600">
+                  Entregado el {formatDate(delivery.submittedAt || delivery.createdAt)}
+                </p>
               </div>
-            </CardContent>
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setSelectedDelivery(delivery);
+                    setRejectDialogOpen(true);
+                  }}
+                >
+                  Rechazar
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    setSelectedDelivery(delivery);
+                    setApproveDialogOpen(true);
+                  }}
+                >
+                  Instalar en mi Servidor
+                </Button>
+              </div>
+            </div>
           </Card>
-        ) : error ? (
-          <Card>
-            <CardContent className="py-4 text-center text-red-500">
-              {error}
-            </CardContent>
-          </Card>
-        ) : deliveries.length === 0 ? (
-          <Card>
-            <CardContent className="py-4 text-center text-gray-500">
-              No hay entregas pendientes
-            </CardContent>
-          </Card>
-        ) : (
-          deliveries.map((delivery) => (
-            <Card key={delivery.id}>
-              <CardContent className="py-4">
-                <div className="flex justify-between items-start">
-                  <div>
-                    <h3 className="font-medium">{delivery.description || 'Sin descripción'}</h3>
-                    <p className="text-sm text-gray-500">{delivery.projectName}</p>
-                    {delivery.createdAt && (
-                      <p className="text-sm text-gray-500">
-                        Entregado el {formatDate(delivery.createdAt)}
-                      </p>
-                    )}
-                  </div>
-                  <Badge className={getStatusColor(delivery.status)}>
-                    {delivery.status === 'delivered' ? 'Entregada' :
-                     delivery.status === 'reviewing' ? 'En Revisión' :
-                     delivery.status === 'approved' ? 'Pendiente de Revisión' :
-                     delivery.status === 'rejected' ? 'Rechazada' : 'Desconocido'}
-                  </Badge>
-                </div>
-              </CardContent>
-            </Card>
-          ))
-        )}
+        ))}
       </div>
+
+      {selectedDelivery && (
+        <>
+          <RejectDeliveryDialog
+            isOpen={rejectDialogOpen}
+            onClose={() => {
+              setRejectDialogOpen(false);
+              setSelectedDelivery(null);
+            }}
+            onConfirm={(message) => {
+              handleRejectDelivery(selectedDelivery.id, message);
+              setRejectDialogOpen(false);
+              setSelectedDelivery(null);
+            }}
+            deliveryTitle={`${selectedDelivery.projectName} - ${formatDate(selectedDelivery.submittedAt)}`}
+          />
+
+          <ApproveDeliveryDialog
+            isOpen={approveDialogOpen}
+            onClose={() => {
+              setApproveDialogOpen(false);
+              setSelectedDelivery(null);
+            }}
+            delivery={selectedDelivery}
+            tasks={selectedDelivery.tasks || []}
+            incidents={selectedDelivery.incidents || []}
+            onConfirm={() => handleApproveDelivery(selectedDelivery.id)}
+            isInvoiced={selectedDelivery.isInvoiced || false}
+            companyData={companyData || undefined}
+          />
+        </>
+      )}
     </div>
   );
 }
